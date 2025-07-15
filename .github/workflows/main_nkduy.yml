@@ -9,6 +9,10 @@ on:
     branches:
       - main
   workflow_dispatch:
+  
+env:
+  AZURE_FUNCTIONAPP_NAME: "my-app"
+  AZURE_FUNCTIONAPP_PACKAGE_PATH: "./release.zip"
 
 jobs:
   build:
@@ -76,4 +80,5 @@ jobs:
         with:
           app-name: 'nkduy'
           slot-name: 'Production'
-          
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_DEV }}
+          package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
