@@ -40,5 +40,5 @@ jobs:
       with:
         app-name: 'khanhsduy'
         slot-name: 'Production'
-        repo-url: 'https://github.com/khanhsduy/fastApi'
-        branch: 'main'
+        publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
+        package: .
