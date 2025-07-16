@@ -37,9 +37,9 @@ jobs:
       - name: Zip app files
         run: |
           mkdir deploy
-          cp -r main.py requirements.txt startup.sh deploy/
+          cp main.py requirements.txt startup.sh deploy/
           cd deploy
-          zip ../release.zip ./* -r
+          zip ../release.zip ./*
 
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
