@@ -9,10 +9,13 @@ on:
     branches:
       - main
   workflow_dispatch:
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-
+    permissions:
+      id-token: write #This is required for requesting the JWT
+      contents: read #This is required for actions/checkout
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -35,4 +38,3 @@ jobs:
       with:
         app-name: 'khanhsduy'
         slot-name: 'Production'
-        package: .
