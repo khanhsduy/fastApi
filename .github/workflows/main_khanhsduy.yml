@@ -37,7 +37,7 @@ jobs:
       - name: Zip app files
         run: |
           mkdir deploy
-          cp -r main.py requirements.txt startup.txt deploy/
+          cp -r main.py requirements.txt startup.sh deploy/
           cd deploy
           zip ../release.zip ./* -r
 
