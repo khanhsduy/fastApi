@@ -31,6 +31,9 @@ jobs:
     - name: Create zip package
       run: zip -r release.zip main.py requirements.txt startup.sh test_main.http
 
+    - name: List files for debug
+      run: ls -l
+
     - name: Login to Azure
       uses: azure/login@v2
       with:
