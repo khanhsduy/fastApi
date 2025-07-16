@@ -1,18 +1,6 @@
-
-import base64
-import os
-from io import BytesIO
-
-import torch
-import torchvision.transforms as transforms
-
-from fastapi import FastAPI, HTTPException, UploadFile, File
-from starlette.responses import StreamingResponse, HTMLResponse
-from PIL import Image
-from typing import Optional
+from fastapi import FastAPI
 
 app = FastAPI()
-
 
 @app.get("/")
 async def root():
