@@ -31,7 +31,7 @@ jobs:
       
       - name: Install dependencies
         run: pip install -r requirements.txt
-        
+      
       # Optional: Add step to run tests here (PyTest, Django test suites, etc.)
 
       - name: Zip artifact for deployment
@@ -44,19 +44,7 @@ jobs:
           path: |
             release.zip
             !venv/
-      - script: |
-          python -m venv antenv
-          source antenv/bin/activate
-          python -m pip install --upgrade pip
-          pip install setup
-          pip install --target="./.python_packages/lib/site-packages" -r ./requirements.txt
-          echo "Installing Requirements"
-          sh requirements.sh
-          pip install fastapi uvicorn
-          echo "The uvicorn version installed is:"
-          uvicorn --version
-        workingDirectory: $(projectRoot)
-        displayName: "Install requirements"
+  
 
   deploy:
     runs-on: ubuntu-latest
