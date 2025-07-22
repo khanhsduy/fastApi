@@ -1,21 +1,34 @@
 
-from fastapi import FastAPI, File, UploadFile
 
-from fastapi import Form, Response
-from PIL import Image
+# ==== IMPORTS ====
+import os
 import io
+from fastapi import FastAPI, File, UploadFile, Form, Response, Request
+from fastapi.staticfiles import StaticFiles
+from PIL import Image
 
+# ==== APP INIT ====
 app = FastAPI()
 
+# ==== ROUTES ====
 @app.get("/")
 async def root():
+    """Root endpoint."""
     return {"message": "Hello World"}
 
 
-# API nhận ảnh gửi lên từ app di động
-import os
+@app.post("/upload-image/")
+async def upload_image(file: UploadFile = File(...)):
+    """Nhận ảnh gửi lên và lưu vào storage."""
+    contents = await file.read()
+    storage_dir = "storage"
+    os.makedirs(storage_dir, exist_ok=True)
+    file_path = os.path.join(storage_dir, file.filename)
+    with open(file_path, "wb") as f:
+        f.write(contents)
+    return {"filename": file.filename, "size": len(contents), "saved_path": file_path}
 
-# API cắt ảnh theo bounding box gửi lên từ app di động
+
 @app.post("/upload-crop-image/")
 async def upload_crop_image(
     file: UploadFile = File(...),
@@ -24,59 +37,48 @@ async def upload_crop_image(
     width: int = Form(...),
     height: int = Form(...)
 ):
-    # Đọc nội dung file
+    """Nhận ảnh và bounding box, cắt ảnh, lưu và trả về ảnh đã cắt."""
     contents = await file.read()
-    # Mở ảnh bằng Pillow
     image = Image.open(io.BytesIO(contents))
-    # Cắt ảnh theo bounding box
     cropped = image.crop((x, y, x + width, y + height))
-    # Tạo thư mục storage nếu chưa tồn tại
     storage_dir = "storage"
     os.makedirs(storage_dir, exist_ok=True)
-    # Tạo tên file mới
     base, ext = os.path.splitext(file.filename)
     cropped_filename = f"{base}_cropped{ext}"
     cropped_path = os.path.join(storage_dir, cropped_filename)
-    # Lưu ảnh đã cắt vào storage
     cropped.save(cropped_path)
-    # Trả file ảnh mới về app
     img_byte_arr = io.BytesIO()
     cropped.save(img_byte_arr, format=image.format or 'PNG')
     img_byte_arr.seek(0)
-    return Response(content=img_byte_arr.read(), media_type=file.content_type or 'image/png', headers={"Content-Disposition": f"attachment; filename={cropped_filename}"})
+    return Response(
+        content=img_byte_arr.read(),
+        media_type=file.content_type or 'image/png',
+        headers={"Content-Disposition": f"attachment; filename={cropped_filename}"}
+    )
 
 
-# API lấy danh sách ảnh trong thư mục storage
 @app.get("/list-images")
-async def list_images():
+async def list_images(request: Request):
+    """Trả về danh sách file và link ảnh trong storage."""
     storage_dir = "storage"
     if not os.path.exists(storage_dir):
         return {"images": []}
     files = [f for f in os.listdir(storage_dir) if os.path.isfile(os.path.join(storage_dir, f))]
-    return {"images": files}
-
-@app.post("/upload-image/")
-async def upload_image(file: UploadFile = File(...)):
-    # Đọc nội dung file
-    contents = await file.read()
-    # Tạo thư mục storage nếu chưa tồn tại
-    storage_dir = "storage"
-    os.makedirs(storage_dir, exist_ok=True)
-    # Đường dẫn lưu file
-    file_path = os.path.join(storage_dir, file.filename)
-    # Lưu file vào thư mục storage
-    with open(file_path, "wb") as f:
-        f.write(contents)
-    # Trả về tên file và kích thước
-    return {"filename": file.filename, "size": len(contents), "saved_path": file_path}
+    image_urls = [str(request.base_url) + f"images/{f}" for f in files]
+    return {"images": files, "image_urls": image_urls}
 
 
+# ==== STATIC FILES ====
+app.mount("/images", StaticFiles(directory="storage"), name="images")
+
+
+# ==== DEMO ROUTES ====
 @app.get("/hello/{name}")
 async def say_hello(name: str):
     return {"message": f"Hello {name}"}
 
 @app.get("/update/{name}")
-async def say_hello(name: str):
+async def say_update(name: str):
     return {"message": f"Update {name}"}
 
 
