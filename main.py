@@ -3,9 +3,9 @@
 # ==== IMPORTS ====
 import os
 import io
-from fastapi import FastAPI, File, UploadFile, Form, Response, Request
+from fastapi import FastAPI, File, UploadFile, Form, Response, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
-from PIL import Image
+from PIL import Image, ImageOps
 
 # ==== APP INIT ====
 app = FastAPI()
@@ -32,28 +32,55 @@ async def upload_image(file: UploadFile = File(...)):
 @app.post("/upload-crop-image/")
 async def upload_crop_image(
     file: UploadFile = File(...),
-    x: int = Form(...),
-    y: int = Form(...),
-    width: int = Form(...),
-    height: int = Form(...)
+    x: float = Form(...),
+    y: float = Form(...),
+    width: float = Form(...),
+    height: float = Form(...)
 ):
-    """Nhận ảnh và bounding box, cắt ảnh, lưu và trả về ảnh đã cắt."""
+    """Nhận ảnh + bbox (x,y,w,h theo ảnh gốc), cắt, lưu và trả ảnh đã cắt."""
+    if width <= 0 or height <= 0:
+        raise HTTPException(status_code=400, detail="width/height phải > 0")
+
     contents = await file.read()
-    image = Image.open(io.BytesIO(contents))
-    cropped = image.crop((x, y, x + width, y + height))
+
+    # 1) Mở ảnh & xử lý xoay EXIF
+    try:
+        image = Image.open(io.BytesIO(contents))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Không đọc được ảnh")
+    image = ImageOps.exif_transpose(image)  # rất quan trọng
+
+    W, H = image.size
+
+    # 2) Làm tròn + clamp biên
+    L = max(0, min(int(round(x)), W - 1))
+    T = max(0, min(int(round(y)), H - 1))
+    R = max(L + 1, min(int(round(x + width)),  W))
+    B = max(T + 1, min(int(round(y + height)), H))
+
+    # 3) Crop
+    cropped = image.crop((L, T, R, B))
+
+    # 4) Lưu file (PNG) và trả bytes
     storage_dir = "storage"
     os.makedirs(storage_dir, exist_ok=True)
-    base, ext = os.path.splitext(file.filename)
-    cropped_filename = f"{base}_cropped{ext}"
+    base, _ = os.path.splitext(file.filename or "image")
+    cropped_filename = f"{base}_cropped.png"
     cropped_path = os.path.join(storage_dir, cropped_filename)
-    cropped.save(cropped_path)
-    img_byte_arr = io.BytesIO()
-    cropped.save(img_byte_arr, format=image.format or 'PNG')
-    img_byte_arr.seek(0)
+
+    # ensure mode phù hợp PNG
+    if cropped.mode not in ("RGB", "RGBA"):
+        cropped = cropped.convert("RGB")
+
+    cropped.save(cropped_path, format="PNG")
+    buf = io.BytesIO()
+    cropped.save(buf, format="PNG")
+    buf.seek(0)
+
     return Response(
-        content=img_byte_arr.read(),
-        media_type=file.content_type or 'image/png',
-        headers={"Content-Disposition": f"attachment; filename={cropped_filename}"}
+        content=buf.read(),
+        media_type="image/png",
+        headers={"Content-Disposition": f'inline; filename="{cropped_filename}"'}
     )
 
 
