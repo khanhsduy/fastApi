@@ -1,8 +1,7 @@
 
 
 # ==== IMPORTS ====
-import os
-import io
+import io, os, math
 from fastapi import FastAPI, File, UploadFile, Form, Response, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
@@ -35,9 +34,10 @@ async def upload_crop_image(
     x: float = Form(...),
     y: float = Form(...),
     width: float = Form(...),
-    height: float = Form(...)
+    height: float = Form(...),
 ):
     """Nhận ảnh + bbox (x,y,w,h theo ảnh gốc), cắt, lưu và trả ảnh đã cắt."""
+
     if width <= 0 or height <= 0:
         raise HTTPException(status_code=400, detail="width/height phải > 0")
 
@@ -48,38 +48,38 @@ async def upload_crop_image(
         image = Image.open(io.BytesIO(contents))
     except Exception:
         raise HTTPException(status_code=400, detail="Không đọc được ảnh")
-    image = ImageOps.exif_transpose(image)  # rất quan trọng
+    image = ImageOps.exif_transpose(image)
 
     W, H = image.size
 
-    # 2) Làm tròn + clamp biên
-    L = max(0, min(int(round(x)), W - 1))
-    T = max(0, min(int(round(y)), H - 1))
-    R = max(L + 1, min(int(round(x + width)),  W))
-    B = max(T + 1, min(int(round(y + height)), H))
+    # 2) Clamp biên + dùng floor/ceil
+    L = max(0, min(math.floor(x), W - 1))
+    T = max(0, min(math.floor(y), H - 1))
+    R = max(L + 1, min(math.ceil(x + width), W))
+    B = max(T + 1, min(math.ceil(y + height), H))
 
     # 3) Crop
     cropped = image.crop((L, T, R, B))
 
-    # 4) Lưu file (PNG) và trả bytes
+    # 4) Lưu file (JPEG để nhẹ hơn)
     storage_dir = "storage"
     os.makedirs(storage_dir, exist_ok=True)
     base, _ = os.path.splitext(file.filename or "image")
-    cropped_filename = f"{base}_cropped.png"
+    cropped_filename = f"{base}_cropped.jpg"
     cropped_path = os.path.join(storage_dir, cropped_filename)
 
-    # ensure mode phù hợp PNG
-    if cropped.mode not in ("RGB", "RGBA"):
+    if cropped.mode != "RGB":
         cropped = cropped.convert("RGB")
 
-    cropped.save(cropped_path, format="PNG")
+    cropped.save(cropped_path, format="JPEG", quality=95)
+
     buf = io.BytesIO()
-    cropped.save(buf, format="PNG")
+    cropped.save(buf, format="JPEG", quality=95)
     buf.seek(0)
 
     return Response(
         content=buf.read(),
-        media_type="image/png",
+        media_type="image/jpeg",
         headers={"Content-Disposition": f'inline; filename="{cropped_filename}"'}
     )
 
