@@ -10,6 +10,8 @@ env:
   IMAGE_NAME: ghcr.io/khanhsduy/fastapi
   AZURE_WEBAPP_NAME: khanhsduy
   MODEL_FILE: saved_model/stegastamp_pretrained/variables/variables.data-00000-of-00001
+  MODEL_OID: 1ca5cd940906f57454fcf3d05d4f81edd87066903f7ced2ba57399614bca3bf0
+  MODEL_SIZE: 217018916
 
 jobs:
   build-and-deploy:
@@ -21,7 +23,10 @@ jobs:
       id-token: write
 
     steps:
-      - name: Checkout source with Git LFS
+      # ==============================
+      # CHECKOUT SOURCE + LFS
+      # ==============================
+      - name: Checkout source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -29,25 +34,44 @@ jobs:
           persist-credentials: true
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Force LFS checkout
+      # ==============================
+      # MATERIALIZE MODEL
+      # ==============================
+      - name: Materialize TensorFlow model
         shell: bash
         run: |
           set -e
 
-          echo "=== Git LFS version ==="
-          git lfs version
-
-          echo "=== LFS files ==="
+          echo "=== Git LFS files ==="
           git lfs ls-files -l
 
-          echo "=== Model before ==="
+          echo "=== Fetch LFS object ==="
+          git lfs fetch origin main
+
+          LFS_OBJECT=".git/lfs/objects/1c/a5/${{ env.MODEL_OID }}"
+
+          echo "=== Check downloaded LFS object ==="
+          ls -lh "$LFS_OBJECT"
+
+          OBJECT_SIZE=$(stat -c%s "$LFS_OBJECT")
+          echo "LFS object size: ${OBJECT_SIZE} bytes"
+
+          if [ "$OBJECT_SIZE" -ne "${{ env.MODEL_SIZE }}" ]; then
+            echo "ERROR: Downloaded LFS object has wrong size"
+            echo "Expected: ${{ env.MODEL_SIZE }}"
+            echo "Actual: ${OBJECT_SIZE}"
+            exit 1
+          fi
+
+          echo "=== Copy real model into working tree ==="
+          cp "$LFS_OBJECT" "${{ env.MODEL_FILE }}"
+
+          echo "=== Working tree model ==="
           ls -lh "${{ env.MODEL_FILE }}"
 
-          git lfs checkout
-
-          echo "=== Model after ==="
-          ls -lh "${{ env.MODEL_FILE }}"
-
+      # ==============================
+      # VERIFY MODEL
+      # ==============================
       - name: Verify TensorFlow model
         shell: bash
         run: |
@@ -57,22 +81,24 @@ jobs:
 
           echo "Model size: ${SIZE} bytes"
 
-          if [ "${SIZE}" -ne 217018916 ]; then
-            echo "ERROR: Git LFS model is not materialized."
-            echo "Expected: 217018916 bytes"
+          if [ "${SIZE}" -ne "${{ env.MODEL_SIZE }}" ]; then
+            echo "=========================================="
+            echo "ERROR: TensorFlow model is invalid"
+            echo "Expected: ${{ env.MODEL_SIZE }} bytes"
             echo "Actual: ${SIZE} bytes"
-
-            echo "=== LFS ENV ==="
-            git lfs env
-
-            echo "=== LFS OBJECTS ==="
-            find .git/lfs/objects -type f -ls || true
-
+            echo "=========================================="
             exit 1
           fi
 
-          echo "OK: TensorFlow model is 217018916 bytes."
+          echo "=========================================="
+          echo "OK: TensorFlow model is ready"
+          echo "=========================================="
 
+          ls -lh "${{ env.MODEL_FILE }}"
+
+      # ==============================
+      # LOGIN GHCR
+      # ==============================
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -80,6 +106,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # ==============================
+      # BUILD + PUSH DOCKER
+      # ==============================
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
@@ -90,6 +119,9 @@ jobs:
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
 
+      # ==============================
+      # LOGIN AZURE
+      # ==============================
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -97,6 +129,9 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_0A928D275EC34A64ACA366C930288299 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_5408599D2612410989218884C5312265 }}
 
+      # ==============================
+      # CONFIGURE AZURE
+      # ==============================
       - name: Configure Azure Web App container
         uses: azure/CLI@v2
         with:
