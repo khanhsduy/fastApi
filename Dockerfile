@@ -8,7 +8,7 @@ RUN pixi install --locked
 
 COPY . .
 
-ENV STEGASTAMP_MODEL_PATH=/app/saved_models/stegastamp_pretrained
+ENV STEGASTAMP_MODEL_PATH=/app/saved_model/stegastamp_pretrained
 ENV STORAGE_DIR=/home/storage
 ENV PYTHONUNBUFFERED=1
 
