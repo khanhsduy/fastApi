@@ -1,0 +1,27 @@
+[workspace]
+authors = ["Duy"]
+channels = ["conda-forge"]
+name = "stegastamp-fastapi"
+platforms = ["win-64", "linux-64"]
+version = "0.1.0"
+
+[dependencies]
+python = "3.7.*"
+pip = "*"
+
+[pypi-dependencies]
+fastapi = "==0.103.2"
+uvicorn = "==0.22.0"
+python-multipart = "==0.0.6"
+
+tensorflow = "==1.15.5"
+numpy = "==1.18.5"
+protobuf = "==3.20.3"
+pillow = "==8.4.0"
+opencv-python = "==4.5.5.64"
+bchlib = "==0.14.0"
+stn = "==1.0.1"
+
+[tasks]
+dev = "python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+start = "python -m uvicorn main:app --host 0.0.0.0 --port 8000"
