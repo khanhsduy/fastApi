@@ -22,61 +22,85 @@ jobs:
 
     steps:
       # ==============================
-      # CHECKOUT SOURCE + GIT LFS
+      # CHECKOUT SOURCE
       # ==============================
       - name: Checkout source
         uses: actions/checkout@v4
         with:
-          lfs: true
           fetch-depth: 0
+          lfs: false
 
-      - name: Fetch Git LFS files
+      # ==============================
+      # DOWNLOAD GIT LFS MODEL
+      # ==============================
+      - name: Download Git LFS model
+        shell: bash
         run: |
-          git lfs install
-          git lfs fetch
+          set -e
+
+          echo "=== Git LFS version ==="
+          git lfs version
+
+          echo "=== Install Git LFS ==="
+          git lfs install --local
+
+          echo "=== Git remote ==="
+          git remote -v
+
+          echo "=== Git LFS environment ==="
+          git lfs env
+
+          echo "=== LFS files before pull ==="
+          git lfs ls-files
+
+          echo "=== Current model size ==="
+          ls -lh "${{ env.MODEL_FILE }}"
+
+          echo "=== Pull LFS objects ==="
+          git lfs pull origin main
+
+          echo "=== Fetch LFS objects ==="
+          git lfs fetch origin main
+
+          echo "=== Checkout LFS files ==="
           git lfs checkout
+
+          echo "=== LFS files after checkout ==="
+          git lfs ls-files
+
+          echo "=== Model file after LFS checkout ==="
+          ls -lh "${{ env.MODEL_FILE }}"
 
       # ==============================
       # VERIFY MODEL
       # ==============================
-      - name: Check model files
+      - name: Verify TensorFlow model
+        shell: bash
         run: |
-          echo "=== Git LFS files ==="
-          git lfs ls-files
+          set -e
 
-          echo ""
-          echo "=== SavedModel ==="
-          ls -lah saved_model/stegastamp_pretrained
-
-          echo ""
-          echo "=== Variables ==="
-          ls -lah saved_model/stegastamp_pretrained/variables
-
-          echo ""
-          echo "=== Model file size ==="
-          stat -c "%n : %s bytes" "${{ env.MODEL_FILE }}"
-
-      - name: Verify model is not Git LFS pointer
-        run: |
           MODEL_SIZE=$(stat -c%s "${{ env.MODEL_FILE }}")
 
           echo "Model size: ${MODEL_SIZE} bytes"
 
-          if [ "${MODEL_SIZE}" -lt 1000000 ]; then
+          if [ "${MODEL_SIZE}" -lt 200000000 ]; then
             echo "=========================================="
-            echo "ERROR: TensorFlow model is still LFS pointer"
-            echo "Expected model file > 1 MB"
+            echo "ERROR: Git LFS model was not downloaded"
+            echo "Expected size: 217018916 bytes"
             echo "Actual size: ${MODEL_SIZE} bytes"
             echo "=========================================="
 
-            echo ""
-            echo "File content:"
+            echo "Current file content:"
             cat "${{ env.MODEL_FILE }}" || true
 
             exit 1
           fi
 
-          echo "OK: TensorFlow model file is real."
+          echo "=========================================="
+          echo "OK: TensorFlow model is real"
+          echo "=========================================="
+
+          ls -lh "${{ env.MODEL_FILE }}"
 
       # ==============================
       # LOGIN GHCR
@@ -89,7 +113,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # ==============================
-      # BUILD + PUSH DOCKER
+      # BUILD + PUSH DOCKER IMAGE
       # ==============================
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
@@ -111,7 +135,7 @@ jobs:
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_5408599D2612410989218884C5312265 }}
 
       # ==============================
-      # CONFIGURE AZURE WEB APP
+      # CONFIGURE AZURE
       # ==============================
       - name: Configure Azure Web App container
         uses: azure/CLI@v2
