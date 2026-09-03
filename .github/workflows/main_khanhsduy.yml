@@ -1,8 +1,4 @@
-# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
-# More GitHub Actions for Azure: https://github.com/Azure/actions
-# More info on Python, GitHub Actions, and Azure App Service: https://aka.ms/python-webapps-actions
-
-name: Build and deploy Python app to Azure Web App - khanhsduy
+name: Build and Deploy Docker to Azure Web App
 
 on:
   push:
@@ -10,35 +6,67 @@ on:
       - main
   workflow_dispatch:
 
+env:
+  IMAGE_NAME: ghcr.io/khanhsduy/fastapi
+  AZURE_WEBAPP_NAME: khanhsduy
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+
     permissions:
-      id-token: write #This is required for requesting the JWT
-      contents: read #This is required for actions/checkout
+      contents: read
+      packages: write
+      id-token: write
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout source
+        uses: actions/checkout@v4
 
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
+      # Login GitHub Container Registry
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-    # Không cần zip, chỉ cần checkout code
+      # Build Docker image từ Dockerfile và push lên GHCR
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
 
-    - name: Login to Azure
-      uses: azure/login@v2
-      with:
-        client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_12EE4810B00849DE879F73F9FBAC2C05 }}
-        tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_0A928D275EC34A64ACA366C930288299 }}
-        subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_5408599D2612410989218884C5312265 }}
+      # Login Azure
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_12EE4810B00849DE879F73F9FBAC2C05 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_0A928D275EC34A64ACA366C930288299 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_5408599D2612410989218884C5312265 }}
 
-    - name: Deploy to Azure Web App
-      uses: azure/webapps-deploy@v3
-      id: deploy-to-webapp
-      with:
-        app-name: 'khanhsduy'
-        slot-name: 'Production'
-        publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
-        package: .
+      # Cấu hình Azure Web App chạy image vừa build
+      - name: Configure Azure Web App container
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            az webapp config container set \
+              --name "${{ env.AZURE_WEBAPP_NAME }}" \
+              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+              --container-image-name "${{ env.IMAGE_NAME }}:latest" \
+              --container-registry-url "https://ghcr.io" \
+              --container-registry-user "${{ github.actor }}" \
+              --container-registry-password "${{ secrets.GHCR_PAT }}"
+
+            az webapp config appsettings set \
+              --name "${{ env.AZURE_WEBAPP_NAME }}" \
+              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+              --settings WEBSITES_PORT=8000
+
+            az webapp restart \
+              --name "${{ env.AZURE_WEBAPP_NAME }}" \
+              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}"
