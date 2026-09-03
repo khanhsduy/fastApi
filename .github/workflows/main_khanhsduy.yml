@@ -136,10 +136,13 @@ jobs:
         uses: azure/CLI@v2
         with:
           inlineScript: |
+            echo "Deploying image:"
+            echo "${{ env.IMAGE_NAME }}:${{ github.sha }}"
+
             az webapp config container set \
               --name "${{ env.AZURE_WEBAPP_NAME }}" \
               --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
-              --container-image-name "${{ env.IMAGE_NAME }}:latest" \
+              --container-image-name "${{ env.IMAGE_NAME }}:${{ github.sha }}" \
               --container-registry-url "https://ghcr.io" \
               --container-registry-user "${{ github.actor }}" \
               --container-registry-password "${{ secrets.GHCR_PAT }}"
