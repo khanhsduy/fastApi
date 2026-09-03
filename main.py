@@ -284,6 +284,41 @@ def decode_bch_secret(secret):
         "message": "Giải mã watermark thành công",
     }
 
+def get_diploma_by_code(code: str):
+    """
+    Tra cứu văn bằng bằng mã watermark.
+    Sau này thay bằng truy vấn database thật.
+    """
+
+    fake_database = {
+        "DUY2810": {
+            "full_name": "NGUYỄN KHÁNH DUY",
+            "date_of_birth": "01/01/2000",
+            "major": "Công nghệ thông tin",
+            "degree": "Kỹ sư",
+            "classification": "Giỏi",
+            "diploma_number": "CTU123456",
+            "registration_number": "1234",
+            "issue_date": "20/08/2026",
+            "university": "Trường Đại học Cần Thơ",
+        },
+
+        "0603DUY": {
+            "full_name": "TRẦN THỊ B",
+            "date_of_birth": "10/05/2001",
+            "major": "Hệ thống thông tin",
+            "degree": "Cử nhân",
+            "classification": "Khá",
+            "diploma_number": "CTU123457",
+            "registration_number": "1235",
+            "issue_date": "20/08/2026",
+            "university": "Trường Đại học Cần Thơ",
+        },
+    }
+
+    return fake_database.get(
+        code.strip()
+    )
 
 # ==== ROUTES ====
 @app.get("/")
@@ -298,13 +333,16 @@ async def root():
 @app.post("/decode-image/")
 async def decode_image(file: UploadFile = File(...)):
     """
-    Nhận một ảnh, chạy StegaStamp decoder và trả thông tin giải mã.
+    Nhận ảnh văn bằng:
+    1. Decode watermark bằng StegaStamp.
+    2. Dùng mã decode để tra cứu thông tin văn bằng.
+    3. Chỉ trả trạng thái xác thực và thông tin văn bằng.
     """
 
     if decoder_session is None:
         raise HTTPException(
             status_code=503,
-            detail="StegaStamp model chưa được load",
+            detail="Hệ thống xác thực chưa sẵn sàng",
         )
 
     contents = await file.read()
@@ -315,9 +353,7 @@ async def decode_image(file: UploadFile = File(...)):
             detail="File ảnh rỗng",
         )
 
-    image_array, original_width, original_height = prepare_image(
-        contents
-    )
+    image_array, _, _ = prepare_image(contents)
 
     feed_dict = {
         input_image_tensor: [image_array]
@@ -333,23 +369,104 @@ async def decode_image(file: UploadFile = File(...)):
         secret = result[0][0]
 
     except Exception as exc:
+        print(f"Decoder error: {exc}")
+
         raise HTTPException(
             status_code=500,
-            detail=f"Lỗi khi chạy decoder: {exc}",
+            detail="Không thể xác thực văn bằng",
         )
+
+    # ==========================================
+    # DECODE WATERMARK
+    # ==========================================
 
     decoded_result = decode_bch_secret(secret)
 
-    return {
-        "filename": file.filename,
-        "original_width": original_width,
-        "original_height": original_height,
-        "model_input_width": IMAGE_SIZE,
-        "model_input_height": IMAGE_SIZE,
-        "secret_size": len(secret),
-        **decoded_result,
-    }
+    success = decoded_result.get(
+        "success",
+        False,
+    )
 
+    if not success:
+        return {
+            "success": False,
+            "message": "Không xác thực được văn bằng",
+            "diploma": None,
+        }
+
+    # Nội dung watermark chỉ sử dụng nội bộ server
+    decoded_text = decoded_result.get(
+        "decoded_text"
+    )
+
+    if not decoded_text:
+        return {
+            "success": False,
+            "message": "Không xác thực được văn bằng",
+            "diploma": None,
+        }
+
+    # ==========================================
+    # TRA CỨU THÔNG TIN VĂN BẰNG
+    # ==========================================
+
+    diploma = get_diploma_by_code(
+        decoded_text
+    )
+
+    if diploma is None:
+        return {
+            "success": False,
+            "message": "Không tìm thấy thông tin văn bằng",
+            "diploma": None,
+        }
+
+    # ==========================================
+    # CHỈ TRẢ THÔNG TIN CẦN THIẾT CHO APP
+    # ==========================================
+
+    return {
+        "success": True,
+        "message": "Văn bằng xác thực",
+        "diploma": {
+            "full_name": diploma.get(
+                "full_name",
+                "",
+            ),
+            "date_of_birth": diploma.get(
+                "date_of_birth",
+                "",
+            ),
+            "major": diploma.get(
+                "major",
+                "",
+            ),
+            "degree": diploma.get(
+                "degree",
+                "",
+            ),
+            "classification": diploma.get(
+                "classification",
+                "",
+            ),
+            "diploma_number": diploma.get(
+                "diploma_number",
+                "",
+            ),
+            "registration_number": diploma.get(
+                "registration_number",
+                "",
+            ),
+            "issue_date": diploma.get(
+                "issue_date",
+                "",
+            ),
+            "university": diploma.get(
+                "university",
+                "",
+            ),
+        },
+    }
 
 @app.post("/upload-image/")
 async def upload_image(file: UploadFile = File(...)):
