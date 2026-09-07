@@ -39,6 +39,18 @@ PACKET_BITS = 96
 BCH_POLYNOMIAL = 137
 BCH_BITS = 5
 
+# ==== REPRINT DETECTION (TẠM THỜI) ====
+# Các ngưỡng này được hiệu chỉnh sơ bộ từ bộ test hiện tại.
+# Khi có dataset lớn hơn cần hiệu chỉnh/train lại.
+REPRINT_GRADIENT_STD_THRESHOLD = 0.042
+REPRINT_LAPLACIAN_THRESHOLD = 0.0105
+REPRINT_HF_ENERGY_THRESHOLD = 9.70
+REPRINT_RAW_CONFIDENCE_THRESHOLD = 0.82
+REPRINT_NEAR_THRESHOLD_020 = 0.12
+
+# gradient_std đang là feature tách tốt nhất nên cho trọng số 3.
+REPRINT_SCORE_THRESHOLD = 4
+
 
 # Tạo storage trước khi mount StaticFiles
 os.makedirs(STORAGE_DIR, exist_ok=True)
@@ -64,6 +76,7 @@ decoder_graph = None
 decoder_session = None
 input_image_tensor = None
 output_secret_tensor = None
+raw_output_secret_tensor = None
 
 # Tránh nhiều request gọi cùng Session đồng thời
 decoder_lock = threading.Lock()
@@ -111,6 +124,7 @@ def load_stegastamp_model():
     global decoder_session
     global input_image_tensor
     global output_secret_tensor
+    global raw_output_secret_tensor
 
     if not os.path.isdir(MODEL_PATH):
         raise RuntimeError(
@@ -144,9 +158,22 @@ def load_stegastamp_model():
             output_secret_name
         )
 
+        # SavedModel hiện tại expose output là Round:0.
+        # Lấy tensor ngay trước Round (thường là Sigmoid:0)
+        # để đo độ tin cậy của watermark trước khi bị ép về 0/1.
+        round_op = output_secret_tensor.op
+
+        if len(round_op.inputs) < 1:
+            raise RuntimeError(
+                "Không tìm thấy tensor đầu vào của output decoder"
+            )
+
+        raw_output_secret_tensor = round_op.inputs[0]
+
     print("StegaStamp model đã sẵn sàng")
     print(f"Input tensor: {input_image_tensor.name}")
     print(f"Output tensor: {output_secret_tensor.name}")
+    print(f"Raw tensor: {raw_output_secret_tensor.name}")
 
 
 @app.on_event("shutdown")
@@ -194,6 +221,193 @@ def prepare_image(contents: bytes):
     image_array /= 255.0
 
     return image_array, original_width, original_height
+
+
+
+def calculate_image_features(image):
+    """
+    Tính các đặc trưng texture trên ảnh 400x400 đã chuẩn hóa [0, 1].
+    """
+
+    gray = (
+        0.299 * image[:, :, 0]
+        + 0.587 * image[:, :, 1]
+        + 0.114 * image[:, :, 2]
+    )
+
+    gx = np.diff(gray, axis=1)
+    gy = np.diff(gray, axis=0)
+
+    gradient_std = (
+        np.std(gx)
+        + np.std(gy)
+    ) / 2.0
+
+    laplacian = (
+        -4.0 * gray[1:-1, 1:-1]
+        + gray[:-2, 1:-1]
+        + gray[2:, 1:-1]
+        + gray[1:-1, :-2]
+        + gray[1:-1, 2:]
+    )
+
+    laplacian_variance = float(
+        np.var(laplacian)
+    )
+
+    fft = np.fft.fft2(gray)
+    fft_shift = np.fft.fftshift(fft)
+    magnitude = np.abs(fft_shift)
+
+    h, w = magnitude.shape
+    cy = h // 2
+    cx = w // 2
+
+    radius = int(
+        min(h, w) * 0.15
+    )
+
+    yy, xx = np.ogrid[:h, :w]
+
+    center_mask = (
+        (xx - cx) ** 2
+        + (yy - cy) ** 2
+        <= radius ** 2
+    )
+
+    mask = np.ones_like(
+        magnitude,
+        dtype=bool,
+    )
+
+    mask[center_mask] = False
+
+    hf_energy = float(
+        np.mean(
+            magnitude[mask]
+        )
+    )
+
+    return {
+        "gradient_std": float(
+            gradient_std
+        ),
+        "laplacian_variance":
+            laplacian_variance,
+        "hf_energy": hf_energy,
+    }
+
+
+def calculate_raw_decoder_features(raw_secret):
+    """
+    Tính đặc trưng từ tensor trước Round (Sigmoid).
+    """
+
+    raw_secret = np.asarray(
+        raw_secret
+    ).flatten()
+
+    distance_to_threshold = np.abs(
+        raw_secret - 0.5
+    )
+
+    raw_confidence = (
+        distance_to_threshold * 2.0
+    )
+
+    return {
+        "raw_confidence_mean": float(
+            np.mean(
+                raw_confidence
+            )
+        ),
+        "raw_near_threshold_020": float(
+            np.mean(
+                distance_to_threshold < 0.20
+            )
+        ),
+    }
+
+
+def calculate_reprint_score(
+    image_features,
+    raw_features,
+):
+    """
+    Tính điểm nghi ngờ reprint.
+    >= REPRINT_SCORE_THRESHOLD => xem là không xác thực.
+    """
+
+    score = 0
+    reasons = []
+
+    gradient_std = image_features[
+        "gradient_std"
+    ]
+
+    laplacian_variance = image_features[
+        "laplacian_variance"
+    ]
+
+    hf_energy = image_features[
+        "hf_energy"
+    ]
+
+    raw_confidence_mean = raw_features[
+        "raw_confidence_mean"
+    ]
+
+    raw_near_threshold_020 = raw_features[
+        "raw_near_threshold_020"
+    ]
+
+    # Feature mạnh nhất trên bộ test hiện tại
+    if (
+        gradient_std
+        < REPRINT_GRADIENT_STD_THRESHOLD
+    ):
+        score += 3
+        reasons.append(
+            "gradient_std thấp"
+        )
+
+    if (
+        laplacian_variance
+        < REPRINT_LAPLACIAN_THRESHOLD
+    ):
+        score += 1
+        reasons.append(
+            "laplacian_variance thấp"
+        )
+
+    if (
+        hf_energy
+        < REPRINT_HF_ENERGY_THRESHOLD
+    ):
+        score += 1
+        reasons.append(
+            "hf_energy thấp"
+        )
+
+    if (
+        raw_confidence_mean
+        < REPRINT_RAW_CONFIDENCE_THRESHOLD
+    ):
+        score += 1
+        reasons.append(
+            "raw_confidence_mean thấp"
+        )
+
+    if (
+        raw_near_threshold_020
+        >= REPRINT_NEAR_THRESHOLD_020
+    ):
+        score += 1
+        reasons.append(
+            "nhiều bit gần threshold"
+        )
+
+    return score, reasons
 
 
 def decode_bch_secret(secret):
@@ -362,11 +576,15 @@ async def decode_image(file: UploadFile = File(...)):
     try:
         with decoder_lock:
             result = decoder_session.run(
-                [output_secret_tensor],
+                [
+                    output_secret_tensor,
+                    raw_output_secret_tensor,
+                ],
                 feed_dict=feed_dict,
             )
 
         secret = result[0][0]
+        raw_secret = result[1][0]
 
     except Exception as exc:
         print(f"Decoder error: {exc}")
@@ -388,6 +606,55 @@ async def decode_image(file: UploadFile = File(...)):
     )
 
     if not success:
+        return {
+            "success": False,
+            "message": "Không xác thực được văn bằng",
+            "diploma": None,
+        }
+
+    # ==========================================
+    # KIỂM TRA DẤU HIỆU REPRINT
+    # ==========================================
+
+    image_features = calculate_image_features(
+        image_array
+    )
+
+    raw_features = (
+        calculate_raw_decoder_features(
+            raw_secret
+        )
+    )
+
+    reprint_score, reprint_reasons = (
+        calculate_reprint_score(
+            image_features,
+            raw_features,
+        )
+    )
+
+    # Log nội bộ server để debug/nghiên cứu.
+    print(
+        "Reprint check:",
+        {
+            "score": reprint_score,
+            "reasons": reprint_reasons,
+            **image_features,
+            **raw_features,
+            "bitflips": decoded_result.get(
+                "bitflips",
+                -1,
+            ),
+        }
+    )
+
+    # Tạm thời hệ thống chỉ có 2 trạng thái.
+    # Nếu watermark decode được nhưng có dấu hiệu reprint mạnh
+    # thì vẫn trả về "Không xác thực được văn bằng".
+    if (
+        reprint_score
+        >= REPRINT_SCORE_THRESHOLD
+    ):
         return {
             "success": False,
             "message": "Không xác thực được văn bằng",
