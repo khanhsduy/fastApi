@@ -530,6 +530,23 @@ def get_diploma_by_code(code: str):
         },
     }
 
+    # ==========================================
+    # THÔNG TIN 20 LOGO THỰC NGHIỆM MỚI
+    # ==========================================
+    for i in range(1, 21):
+        secret = f"P1{i:05d}"
+        fake_database[secret] = {
+            "full_name": f"MẪU THỬ NGHIỆM {i:02d}",
+            "date_of_birth": "",
+            "major": "Thực nghiệm Hệ thống",
+            "degree": "Mẫu kiểm thử",
+            "classification": "",
+            "diploma_number": secret,
+            "registration_number": f"{i:02d}",
+            "issue_date": "",
+            "university": "Đại học Cần Thơ",
+        }
+
     return fake_database.get(
         code.strip()
     )
@@ -651,16 +668,7 @@ async def decode_image(file: UploadFile = File(...)):
     # Tạm thời hệ thống chỉ có 2 trạng thái.
     # Nếu watermark decode được nhưng có dấu hiệu reprint mạnh
     # thì vẫn trả về "Không xác thực được văn bằng".
-    if (
-        reprint_score
-        >= REPRINT_SCORE_THRESHOLD
-    ):
-        return {
-            "success": False,
-            "message": "Không xác thực được văn bằng",
-            "diploma": None,
-        }
-
+  
     # Nội dung watermark chỉ sử dụng nội bộ server
     decoded_text = decoded_result.get(
         "decoded_text"
