@@ -30,7 +30,7 @@ STORAGE_DIR = "storage"
 # Đổi đường dẫn này thành thư mục model của anh
 MODEL_PATH = os.getenv(
     "STEGASTAMP_MODEL_PATH",
-    "saved_model/stegastamp_pretrained",
+    "saved_model/stegastamp_finetune",
 )
 
 IMAGE_SIZE = 400
