@@ -9,7 +9,7 @@ on:
 env:
   IMAGE_NAME: ghcr.io/khanhsduy/fastapi
   AZURE_WEBAPP_NAME: khanhsduy
-  MODEL_FILE: saved_model/stegastamp_pretrained/variables/variables.data-00000-of-00001
+  MODEL_FILE: saved_model/stegastamp_finetune/variables/variables.data-00000-of-00001
   MODEL_OID: 1ca5cd940906f57454fcf3d05d4f81edd87066903f7ced2ba57399614bca3bf0
   MODEL_SIZE: 217018916
 
