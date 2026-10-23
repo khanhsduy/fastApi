@@ -1,3 +1,4 @@
+
 name: Build and Deploy Docker to Azure Web App
 
 on:
@@ -9,9 +10,10 @@ on:
 env:
   IMAGE_NAME: ghcr.io/khanhsduy/fastapi
   AZURE_WEBAPP_NAME: khanhsduy
+
+  MODEL_DIR: saved_model/stegastamp_finetune
   MODEL_FILE: saved_model/stegastamp_finetune/variables/variables.data-00000-of-00001
-  MODEL_OID: 1ca5cd940906f57454fcf3d05d4f81edd87066903f7ced2ba57399614bca3bf0
-  MODEL_SIZE: 217018916
+  CONTAINER_MODEL_FILE: /app/saved_model/stegastamp_finetune/variables/variables.data-00000-of-00001
 
 jobs:
   build-and-deploy:
@@ -23,82 +25,97 @@ jobs:
       id-token: write
 
     steps:
-      # ==============================
-      # CHECKOUT SOURCE + LFS
-      # ==============================
+      # ==========================================
+      # 1. CHECKOUT SOURCE + LFS
+      # ==========================================
       - name: Checkout source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           lfs: true
           persist-credentials: true
-          token: ${{ secrets.GITHUB_TOKEN }}
 
-      # ==============================
-      # MATERIALIZE MODEL
-      # ==============================
-      - name: Materialize TensorFlow model
+      # ==========================================
+      # 2. LOAD MODEL THEO COMMIT HIỆN TẠI
+      # ==========================================
+      - name: Download current LFS model
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          echo "=== Git LFS files ==="
+          echo "=== GIT LFS FILES ==="
           git lfs ls-files -l
 
-          echo "=== Fetch LFS object ==="
-          git lfs fetch origin main
+          echo "=== DOWNLOAD CURRENT LFS DATA ==="
+          git lfs pull
 
-          LFS_OBJECT=".git/lfs/objects/1c/a5/${{ env.MODEL_OID }}"
+          echo "=== MODEL DIRECTORY ==="
+          ls -lah "$MODEL_DIR"
+          ls -lah "$MODEL_DIR/variables"
 
-          echo "=== Check downloaded LFS object ==="
-          ls -lh "$LFS_OBJECT"
+          test -f "$MODEL_DIR/saved_model.pb"
+          test -f "$MODEL_DIR/variables/variables.index"
+          test -f "$MODEL_FILE"
 
-          OBJECT_SIZE=$(stat -c%s "$LFS_OBJECT")
-          echo "LFS object size: ${OBJECT_SIZE} bytes"
-
-          if [ "$OBJECT_SIZE" -ne "${{ env.MODEL_SIZE }}" ]; then
-            echo "ERROR: Downloaded LFS object has wrong size"
-            echo "Expected: ${{ env.MODEL_SIZE }}"
-            echo "Actual: ${OBJECT_SIZE}"
-            exit 1
-          fi
-
-          echo "=== Copy real model into working tree ==="
-          cp "$LFS_OBJECT" "${{ env.MODEL_FILE }}"
-
-          echo "=== Working tree model ==="
-          ls -lh "${{ env.MODEL_FILE }}"
-
-      # ==============================
-      # VERIFY MODEL
-      # ==============================
-      - name: Verify TensorFlow model
+      # ==========================================
+      # 3. KIỂM TRA SHA256 THEO GIT LFS POINTER
+      # ==========================================
+      - name: Verify current model SHA256
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          SIZE=$(stat -c%s "${{ env.MODEL_FILE }}")
+          echo "=== READ CURRENT COMMIT POINTER ==="
+          git show "HEAD:$MODEL_FILE" > /tmp/model.pointer
 
-          echo "Model size: ${SIZE} bytes"
+          cat /tmp/model.pointer
 
-          if [ "${SIZE}" -ne "${{ env.MODEL_SIZE }}" ]; then
-            echo "=========================================="
-            echo "ERROR: TensorFlow model is invalid"
-            echo "Expected: ${{ env.MODEL_SIZE }} bytes"
-            echo "Actual: ${SIZE} bytes"
-            echo "=========================================="
+          EXPECTED_SHA=$(
+            sed -n 's/^oid sha256://p' /tmp/model.pointer
+          )
+
+          EXPECTED_SIZE=$(
+            sed -n 's/^size //p' /tmp/model.pointer
+          )
+
+          if ! [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "ERROR: Invalid LFS SHA256"
             exit 1
           fi
 
-          echo "=========================================="
-          echo "OK: TensorFlow model is ready"
-          echo "=========================================="
+          if ! [[ "$EXPECTED_SIZE" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: Invalid LFS size"
+            exit 1
+          fi
 
-          ls -lh "${{ env.MODEL_FILE }}"
+          ACTUAL_SHA=$(sha256sum "$MODEL_FILE" | awk '{print $1}')
+          ACTUAL_SIZE=$(stat -c%s "$MODEL_FILE")
 
-      # ==============================
-      # LOGIN GHCR
-      # ==============================
+          echo "=== COMPARE MODEL ==="
+          echo "Expected size: $EXPECTED_SIZE"
+          echo "Actual size:   $ACTUAL_SIZE"
+          echo "Expected SHA:  $EXPECTED_SHA"
+          echo "Actual SHA:    $ACTUAL_SHA"
+
+          if [ "$EXPECTED_SIZE" != "$ACTUAL_SIZE" ]; then
+            echo "ERROR: MODEL SIZE MISMATCH"
+            exit 1
+          fi
+
+          if [ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]; then
+            echo "ERROR: MODEL CHECKSUM MISMATCH"
+            exit 1
+          fi
+
+          echo "=== OTHER MODEL FILES ==="
+          sha256sum "$MODEL_DIR/saved_model.pb"
+          sha256sum "$MODEL_DIR/variables/variables.index"
+
+          echo "SUCCESS: LFS MODEL CHECKSUM VERIFIED"
+
+      # ==========================================
+      # 4. LOGIN GHCR
+      # ==========================================
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -106,22 +123,79 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ==============================
-      # BUILD + PUSH DOCKER
-      # ==============================
-      - name: Build and push Docker image
+      # ==========================================
+      # 5. BUILD DOCKER - CHƯA PUSH
+      # ==========================================
+      - name: Build Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
+          load: true
+          push: false
           no-cache: true
           tags: |
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
 
-      # ==============================
-      # LOGIN AZURE
-      # ==============================
+      # ==========================================
+      # 6. KIỂM TRA MODEL TRONG DOCKER IMAGE
+      # ==========================================
+      - name: Verify model inside Docker
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE="${IMAGE_NAME}:${GITHUB_SHA}"
+
+          echo "=== CREATE TEMPORARY CONTAINER ==="
+          CONTAINER_ID=$(docker create "$IMAGE")
+
+          trap 'docker rm -f "$CONTAINER_ID" >/dev/null 2>&1 || true' EXIT
+
+          mkdir -p /tmp/model-check
+
+          echo "=== EXTRACT MODEL FROM DOCKER ==="
+          docker cp \
+            "$CONTAINER_ID:$CONTAINER_MODEL_FILE" \
+            /tmp/model-check/model.data
+
+          SOURCE_SHA=$(sha256sum "$MODEL_FILE" | awk '{print $1}')
+          DOCKER_SHA=$(sha256sum /tmp/model-check/model.data | awk '{print $1}')
+
+          SOURCE_SIZE=$(stat -c%s "$MODEL_FILE")
+          DOCKER_SIZE=$(stat -c%s /tmp/model-check/model.data)
+
+          echo "Source SHA: $SOURCE_SHA"
+          echo "Docker SHA: $DOCKER_SHA"
+          echo "Source size: $SOURCE_SIZE"
+          echo "Docker size: $DOCKER_SIZE"
+
+          if [ "$SOURCE_SHA" != "$DOCKER_SHA" ]; then
+            echo "ERROR: Docker model checksum mismatch"
+            exit 1
+          fi
+
+          if [ "$SOURCE_SIZE" != "$DOCKER_SIZE" ]; then
+            echo "ERROR: Docker model size mismatch"
+            exit 1
+          fi
+
+          echo "SUCCESS: DOCKER MODEL VERIFIED"
+
+      # ==========================================
+      # 7. PUSH DOCKER KHI FILE HỢP LỆ
+      # ==========================================
+      - name: Push Docker image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker push "${IMAGE_NAME}:${GITHUB_SHA}"
+          docker push "${IMAGE_NAME}:latest"
+
+      # ==========================================
+      # 8. LOGIN AZURE
+      # ==========================================
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -129,14 +203,16 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_0A928D275EC34A64ACA366C930288299 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_5408599D2612410989218884C5312265 }}
 
-      # ==============================
-      # CONFIGURE AZURE
-      # ==============================
+      # ==========================================
+      # 9. DEPLOY AZURE
+      # ==========================================
       - name: Configure Azure Web App container
         uses: azure/CLI@v2
         with:
           inlineScript: |
-            echo "Deploying image:"
+            set -e
+
+            echo "Deploying Docker image"
             echo "${{ env.IMAGE_NAME }}:${{ github.sha }}"
 
             az webapp config container set \
